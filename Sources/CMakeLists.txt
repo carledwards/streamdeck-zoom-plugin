@@ -16,11 +16,11 @@ endif()
 if(APPLE)
   set(SOURCES
     ${SOURCES}
-    MacOS.cpp
+    MacOS.mm
   )
+  find_library(FOUNDATION_LIBRARY Foundation)
+  SET(EXTRA_LIBS ${FOUNDATION_LIBRARY})
 endif()
-
-
 
 add_executable(
   sdzoomplugin
