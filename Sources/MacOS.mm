@@ -1,6 +1,11 @@
 // Martijn Smit <martijn@lostdomain.org / @smitmartijn>
+
+// uncomment if you want debugging output (errors are always logged)
+// #undef NDEBUG
+
 #include "ZoomStreamDeckPlugin.h"
 #include <StreamDeckSDK/ESDLogger.h>
+#include <Foundation/Foundation.h>
 
 extern std::string m_zoomMenuMeeting;
 extern std::string m_zoomMenuMuteAudio;
@@ -22,318 +27,462 @@ extern std::string m_zoomMenuStopRecordLocal;
 
 extern std::string m_zoomMenuWindow;
 extern std::string m_zoomMenuClose;
+extern std::string m_zoomMenuZoomMeeting;
 
 extern std::string m_zoomMenuMuteAll;
 extern std::string m_zoomMenuUnmuteAll;
 
-char *execAndReturn(const char *command)
-{
-  FILE *fp;
-  char *line = NULL;
-  // Following initialization is equivalent to char* result = ""; and just
-  // initializes result to an empty string, only it works with
-  // -Werror=write-strings and is so much less clear.
-  char *result = (char *)calloc(1, 1);
-  size_t len = 0;
+int zoomStatusSkipCount = 0;
 
-  fflush(NULL);
-  fp = popen(command, "r");
-  if (fp == NULL)
+std::string osGetZoomStatus() {
+  @autoreleasepool
   {
-    printf("Cannot execute command:\n%s\n", command);
-    ESDDebug("Cannot execute command:\n%s\n", command);
-    return NULL;
-  }
+    NSString *source = [NSString stringWithFormat:@""
+        "set zoomStatus to \"closed\"\n"
+        "set muteStatus to \"disabled\"\n"
+        "set videoStatus to \"disabled\"\n"
+        "set shareStatus to \"disabled\"\n"
+        "set recordStatus to \"disabled\"\n"
+        "set speakerViewStatus to \"disabled\"\n"
+        "set minimalView to \"disabled\"\n"
+        "tell application \"System Events\"\n"
+        "	if (get name of every application process) contains \"zoom.us\" then\n"
+        "		set zoomStatus to \"open\"\n"
+        "		tell application process \"zoom.us\"\n"
+        "			if exists (menu bar item \"%@\" of menu bar 1) then\n"
+        "				set zoomStatus to \"call\"\n"
+        "				if exists (menu item \"%@\" of menu 1 of menu bar item \"%@\" of menu bar 1) then\n"
+        "					set muteStatus to \"unmuted\"\n"
+        "				else\n"
+        "					set muteStatus to \"muted\"\n"
+        "				end if\n"
+        "				if exists (menu item \"%@\" of menu 1 of menu bar item \"%@\" of menu bar 1) then\n"
+        "					set videoStatus to \"stopped\"\n"
+        "				else\n"
+        "					set videoStatus to \"started\"\n"
+        "				end if\n"
+        "				if exists (menu item \"%@\" of menu 1 of menu bar item \"%@\" of menu bar 1) then\n"
+        "					set shareStatus to \"stopped\"\n"
+        "				else\n"
+        "					set shareStatus to \"started\"\n"
+        "				end if\n"
+        "				if exists (menu item \"%@\" of menu 1 of menu bar item \"%@\" of menu bar 1) then\n"
+        "					set recordStatus to \"stopped\"\n"
+        "				else if exists (menu item \"%@\" of menu 1 of menu bar item \"%@\" of menu bar 1) then\n"
+        "					set recordStatus to \"stopped\"\n"
+        "				else\n"
+        "					set recordStatus to \"started\"\n"
+        "				end if\n"
+        "			end if\n"
+        "		end tell\n"
+        "	end if\n"
+        " return \"zoomMute:\" & (muteStatus as text) & \",zoomVideo:\" & (videoStatus as text) & \",zoomStatus:\" & (zoomStatus as text) & \",zoomShare:\" & (shareStatus as text) & \",zoomRecord:\" & (recordStatus as text)\n"
+        "end tell\n",
+      [NSString stringWithUTF8String:m_zoomMenuMeeting.c_str()], 
+      [NSString stringWithUTF8String:m_zoomMenuMuteAudio.c_str()], 
+      [NSString stringWithUTF8String:m_zoomMenuMeeting.c_str()], 
+      [NSString stringWithUTF8String:m_zoomMenuStartVideo.c_str()],
+      [NSString stringWithUTF8String:m_zoomMenuMeeting.c_str()], 
+      [NSString stringWithUTF8String:m_zoomMenuStartShare.c_str()], 
+      [NSString stringWithUTF8String:m_zoomMenuMeeting.c_str()], 
+      [NSString stringWithUTF8String:m_zoomMenuStartRecordToCloud.c_str()],
+      [NSString stringWithUTF8String:m_zoomMenuMeeting.c_str()], 
+      [NSString stringWithUTF8String:m_zoomMenuStartRecord.c_str()], 
+      [NSString stringWithUTF8String:m_zoomMenuMeeting.c_str()]
+    ];
 
-  while (getline(&line, &len, fp) != -1)
+    // ESDDebug("osGetZoomStatus script: %s", [source cStringUsingEncoding: NSUTF8StringEncoding]);
+    NSDictionary *errorInfo = nil;
+    NSAppleScript *appleScript = [[NSAppleScript alloc] initWithSource:source];
+    NSAppleEventDescriptor *theDescriptor = [appleScript executeAndReturnError:&errorInfo];
+    NSString *theResult = [theDescriptor stringValue];
+    [appleScript release];
+    ESDDebug("osGetZoomStatus result: %s", [[theResult description] cStringUsingEncoding: NSUTF8StringEncoding]);
+    if (errorInfo) {
+      ESDLog("osGetZoomStatus errorInfo: %s", [[errorInfo description] cStringUsingEncoding: NSUTF8StringEncoding]);
+    }
+
+    // Zoom menus are not updated quickly to reflect the most recent toggle (e.g. mute, video, share)
+    // we will skip a specified number of the status calls so the buttons on the Stream Deck don't show 
+    // the incorrect states (this takes about 3 seconds)
+    return std::string(zoomStatusSkipCount-- > 0 || errorInfo ? "" : [theResult cStringUsingEncoding: NSUTF8StringEncoding]);
+  }
+}
+
+void osToggleZoomMute() {
+  @autoreleasepool
   {
-    // +1 below to allow room for null terminator.
-    result = (char *)realloc(result, strlen(result) + strlen(line) + 1);
-    // +1 below so we copy the final null terminator.
-    strncpy(result + strlen(result), line, strlen(line) + 1);
-    free(line);
-    line = NULL;
+    NSString *source = [NSString stringWithFormat:@""
+          "tell application \"System Events\"\n"
+          "  set didRun to false\n"
+          "  if (get name of every application process) contains \"zoom.us\" then\n"
+          "    tell application process \"zoom.us\"\n"
+          "      if exists (menu item \"%@\" of menu 1 of menu bar item \"%@\" of menu bar 1) then\n"
+          "        click (menu item \"%@\" of menu 1 of menu bar item \"%@\" of menu bar 1)\n"
+          "        set didRun to true\n"
+          "      else if exists (menu item \"%@\" of menu 1 of menu bar item \"%@\" of menu bar 1) then\n"
+          "        click (menu item \"%@\" of menu 1 of menu bar item \"%@\" of menu bar 1)\n"
+          "        set didRun to true\n"
+          "      end if\n"
+          "    end tell\n"
+          "  end if\n"
+          "  return didRun\n"
+          "end tell\n",
+        [NSString stringWithUTF8String:m_zoomMenuUnmuteAudio.c_str()], 
+        [NSString stringWithUTF8String:m_zoomMenuMeeting.c_str()], 
+        [NSString stringWithUTF8String:m_zoomMenuUnmuteAudio.c_str()], 
+        [NSString stringWithUTF8String:m_zoomMenuMeeting.c_str()], 
+        [NSString stringWithUTF8String:m_zoomMenuMuteAudio.c_str()],
+        [NSString stringWithUTF8String:m_zoomMenuMeeting.c_str()],
+        [NSString stringWithUTF8String:m_zoomMenuMuteAudio.c_str()],
+        [NSString stringWithUTF8String:m_zoomMenuMeeting.c_str()] 
+      ];
+    ESDDebug("osToggleZoomMute script: %s", [source cStringUsingEncoding: NSUTF8StringEncoding]);
+    NSDictionary *errorInfo = nil;
+    NSAppleScript *appleScript = [[NSAppleScript alloc] initWithSource:source];
+    NSAppleEventDescriptor *theDescriptor = [appleScript executeAndReturnError:&errorInfo];
+    NSString *theResult = [theDescriptor stringValue];
+    [appleScript release];
+    if (errorInfo) {
+      ESDLog("osToggleZoomMute errorInfo: %s", [[errorInfo description] cStringUsingEncoding: NSUTF8StringEncoding]);
+    }
+    else {
+      ESDDebug("osToggleZoomMute didRun: %s", [theResult cStringUsingEncoding: NSUTF8StringEncoding]);
+      if ([@"true" isEqualTo:theResult]) {
+        zoomStatusSkipCount = 2;
+      }
+    }
   }
+}
 
-  fflush(fp);
-  if (pclose(fp) != 0)
+void osToggleZoomShare() {
+  @autoreleasepool
   {
-    perror("Cannot close stream.\n");
+    NSString *source = [NSString stringWithFormat:@""
+          "tell application \"System Events\"\n"
+          "  set didRun to false\n"
+          "  if (get name of every application process) contains \"zoom.us\" then\n"
+          "    tell application process \"zoom.us\"\n"
+          "      if exists (menu item \"%@\" of menu 1 of menu bar item \"%@\" of menu bar 1) then\n"
+          "        click (menu item \"%@\" of menu 1 of menu bar item \"%@\" of menu bar 1)\n"
+          "        set didRun to true\n"
+          "      else if exists (menu item \"%@\" of menu 1 of menu bar item \"%@\" of menu bar 1) then\n"
+          "        click (menu item \"%@\" of menu 1 of menu bar item \"%@\" of menu bar 1)\n"
+          "        set didRun to true\n"
+          "      end if\n"
+          "    end tell\n"
+          "  end if\n"
+          "  return didRun\n"
+          "end tell\n",
+        [NSString stringWithUTF8String:m_zoomMenuStartShare.c_str()], 
+        [NSString stringWithUTF8String:m_zoomMenuMeeting.c_str()], 
+        [NSString stringWithUTF8String:m_zoomMenuStartShare.c_str()], 
+        [NSString stringWithUTF8String:m_zoomMenuMeeting.c_str()], 
+        [NSString stringWithUTF8String:m_zoomMenuStopShare.c_str()],
+        [NSString stringWithUTF8String:m_zoomMenuMeeting.c_str()],
+        [NSString stringWithUTF8String:m_zoomMenuStopShare.c_str()],
+        [NSString stringWithUTF8String:m_zoomMenuMeeting.c_str()] 
+      ];
+    ESDDebug("osToggleZoomShare script: %s", [source cStringUsingEncoding: NSUTF8StringEncoding]);
+    NSDictionary *errorInfo = nil;
+    NSAppleScript *appleScript = [[NSAppleScript alloc] initWithSource:source];
+    NSAppleEventDescriptor *theDescriptor = [appleScript executeAndReturnError:&errorInfo];
+    NSString *theResult = [theDescriptor stringValue];
+    [appleScript release];
+    if (errorInfo) {
+      ESDLog("osToggleZoomShare errorInfo: %s", [[errorInfo description] cStringUsingEncoding: NSUTF8StringEncoding]);
+    }
+    else {
+      ESDDebug("osToggleZoomShare didRun: %s", [theResult cStringUsingEncoding: NSUTF8StringEncoding]);
+      if ([@"true" isEqualTo:theResult]) {
+        zoomStatusSkipCount = 2;
+      }
+    }
   }
-  return result;
 }
 
-std::string osGetZoomStatus()
-{
-  /*
-  Original AS:
-  set zoomStatus to "closed"
-set muteStatus to "disabled"
-set videoStatus to "disabled"
-set shareStatus to "disabled"
-set recordStatus to "disabled"
-tell application "System Events"
-	if exists (window 1 of process "zoom.us") then
-		set zoomStatus to "open"
-		tell application process "zoom.us"
-			if exists (menu bar item "Meeting" of menu bar 1) then
-				set zoomStatus to "call"
-				if exists (menu item "Mute audio" of menu 1 of menu bar item "Meeting" of menu bar 1) then
-					set muteStatus to "unmuted"
-				else
-					set muteStatus to "muted"
-				end if
-				if exists (menu item "Start Video" of menu 1 of menu bar item "Meeting" of menu bar 1) then
-					set videoStatus to "stopped"
-				else
-					set videoStatus to "started"
-				end if
-				if exists (menu item "Start Share" of menu 1 of menu bar item "Meeting" of menu bar 1) then
-					set shareStatus to "stopped"
-				else
-					set shareStatus to "started"
-				end if
-				if exists (menu item "Record to the Cloud" of menu 1 of menu bar item "Meeting" of menu bar 1) then
-					set recordStatus to "stopped"
-				else if exists (menu item "Record" of menu 1 of menu bar item "Meeting" of menu bar 1) then
-					set recordStatus to "stopped"
-				else
-					set recordStatus to "started"
-				end if
-			end if
-		end tell
-	end if
-end tell
-do shell script "echo zoomMute:" & (muteStatus as text) & ",zoomVideo:" & (videoStatus as text) & ",zoomStatus:" & (zoomStatus as text) & ",zoomShare:" & (shareStatus as text) & ",zoomRecord:" & (recordStatus as text)
-  */
-  // ESDDebug("APPLESCRIPT_GET_STATUS: %s", APPLESCRIPT_GET_STATUS);
-  const std::string appleScript = "set zoomStatus to \"closed\"\n"
-                                  "set muteStatus to \"disabled\"\n"
-                                  "set videoStatus to \"disabled\"\n"
-                                  "set shareStatus to \"disabled\"\n"
-                                  "set recordStatus to \"disabled\"\n"
-                                  "set speakerViewStatus to \"disabled\"\n"
-                                  "set minimalView to \"disabled\"\n"
-                                  "tell application \"System Events\"\n"
-                                  "	if (get name of every application process) contains \"zoom.us\" then\n"
-                                  "		set zoomStatus to \"open\"\n"
-                                  "		tell application process \"zoom.us\"\n"
-                                  "			if exists (menu bar item \"" +
-                                  m_zoomMenuMeeting + "\" of menu bar 1) then\n"
-                                                      "				set zoomStatus to \"call\"\n"
-                                                      "				if exists (menu item \"" +
-                                  m_zoomMenuMuteAudio + "\" of menu 1 of menu bar item \"" +
-                                  m_zoomMenuMeeting + "\" of menu bar 1) then\n"
-                                                      "					set muteStatus to \"unmuted\"\n"
-                                                      "				else\n"
-                                                      "					set muteStatus to \"muted\"\n"
-                                                      "				end if\n"
-                                                      "				if exists (menu item \"" +
-                                  m_zoomMenuStartVideo + "\" of menu 1 of menu bar item \"" +
-                                  m_zoomMenuMeeting + "\" of menu bar 1) then\n"
-                                                      "					set videoStatus to \"stopped\"\n"
-                                                      "				else\n"
-                                                      "					set videoStatus to \"started\"\n"
-                                                      "				end if\n"
-                                                      "				if exists (menu item \"" +
-                                  m_zoomMenuStartShare + "\" of menu 1 of menu bar item \"" +
-                                  m_zoomMenuMeeting + "\" of menu bar 1) then\n"
-                                                      "					set shareStatus to \"stopped\"\n"
-                                                      "				else\n"
-                                                      "					set shareStatus to \"started\"\n"
-                                                      "				end if\n"
-                                                      "				if exists (menu item \"" +
-                                  m_zoomMenuStartRecordToCloud + "\" of menu 1 of menu bar item \"" +
-                                  m_zoomMenuMeeting + "\" of menu bar 1) then\n"
-                                                      "					set recordStatus to \"stopped\"\n"
-                                                      "				else if exists (menu item \"" +
-                                  m_zoomMenuStartRecord + "\" of menu 1 of menu bar item \"" +
-                                  m_zoomMenuMeeting + "\" of menu bar 1) then\n"
-                                                      "					set recordStatus to \"stopped\"\n"
-                                                      "				else\n"
-                                                      "					set recordStatus to \"started\"\n"
-                                                      "				end if\n"
-                                                      "			end if\n"
-                                                      "		end tell\n"
-                                                      "	end if\n"
-                                                      "end tell\n"
-                                                      "do shell script \"echo zoomMute:\" & (muteStatus as text) & \",zoomVideo:\" & (videoStatus as text) & \",zoomStatus:\" & (zoomStatus as text) & \",zoomShare:\" & (shareStatus as text) & \",zoomRecord:\" & (recordStatus as text)";
-
-  std::string cmd = "osascript -e '";
-  cmd.append(appleScript);
-  cmd.append("'");
-  char *zoomStatus = execAndReturn(cmd.c_str());
-
-  return std::string(zoomStatus);
+void osToggleZoomVideo() {
+  @autoreleasepool
+  {
+    NSString *source = [NSString stringWithFormat:@""
+          "tell application \"System Events\"\n"
+          "  set didRun to false\n"
+          "  if (get name of every application process) contains \"zoom.us\" then\n"
+          "    tell application process \"zoom.us\"\n"
+          "      if exists (menu item \"%@\" of menu 1 of menu bar item \"%@\" of menu bar 1) then\n"
+          "        click (menu item \"%@\" of menu 1 of menu bar item \"%@\" of menu bar 1)\n"
+          "        set didRun to true\n"
+          "      else if exists (menu item \"%@\" of menu 1 of menu bar item \"%@\" of menu bar 1) then\n"
+          "        click (menu item \"%@\" of menu 1 of menu bar item \"%@\" of menu bar 1)\n"
+          "        set didRun to true\n"
+          "      end if\n"
+          "    end tell\n"
+          "  end if\n"
+          "  return didRun\n"
+          "end tell\n",
+        [NSString stringWithUTF8String:m_zoomMenuStartVideo.c_str()], 
+        [NSString stringWithUTF8String:m_zoomMenuMeeting.c_str()], 
+        [NSString stringWithUTF8String:m_zoomMenuStartVideo.c_str()], 
+        [NSString stringWithUTF8String:m_zoomMenuMeeting.c_str()], 
+        [NSString stringWithUTF8String:m_zoomMenuStopVideo.c_str()],
+        [NSString stringWithUTF8String:m_zoomMenuMeeting.c_str()],
+        [NSString stringWithUTF8String:m_zoomMenuStopVideo.c_str()],
+        [NSString stringWithUTF8String:m_zoomMenuMeeting.c_str()] 
+      ];
+    ESDDebug("osToggleZoomVideo script: %s", [source cStringUsingEncoding: NSUTF8StringEncoding]);
+    NSDictionary *errorInfo = nil;
+    NSAppleScript *appleScript = [[NSAppleScript alloc] initWithSource:source];
+    NSAppleEventDescriptor *theDescriptor = [appleScript executeAndReturnError:&errorInfo];
+    NSString *theResult = [theDescriptor stringValue];
+    [appleScript release];
+    if (errorInfo) {
+      ESDLog("osToggleZoomVideo errorInfo: %s", [[errorInfo description] cStringUsingEncoding: NSUTF8StringEncoding]);
+    }
+    else {
+      ESDDebug("osToggleZoomVideo didRun: %s", [theResult cStringUsingEncoding: NSUTF8StringEncoding]);
+      if ([@"true" isEqualTo:theResult]) {
+        zoomStatusSkipCount = 2;
+      }
+    }
+  }
 }
 
-void osToggleZoomMute()
-{
-  const std::string script = "osascript -e '"
-                             "tell application \"zoom.us\"\n"
-                             "  tell application \"System Events\" to tell application process \"zoom.us\"\n"
-                             "    if exists (menu item \"" +
-                             m_zoomMenuUnmuteAudio + "\" of menu 1 of menu bar item \"" + m_zoomMenuMeeting + "\" of menu bar 1) then\n"
-                                                                                                              "      click (menu item \"" +
-                             m_zoomMenuUnmuteAudio + "\" of menu 1 of menu bar item \"" + m_zoomMenuMeeting + "\" of menu bar 1)\n"
-                                                                                                              "    else\n"
-                                                                                                              "      click (menu item \"" +
-                             m_zoomMenuMuteAudio + "\" of menu 1 of menu bar item \"" + m_zoomMenuMeeting + "\" of menu bar 1)\n"
-                                                                                                            "    end if\n"
-                                                                                                            "  end tell\n"
-                                                                                                            "end tell'\n";
-  //ESDDebug(script.c_str());
-  system(script.c_str());
+void osLeaveZoomMeeting() {
+  @autoreleasepool
+  {
+    NSString *source = [NSString stringWithFormat:@""
+        "tell application \"System Events\"\n"
+        "  set didRun to false\n"
+        "  if (get name of every application process) contains \"zoom.us\" then\n"
+        "    tell application \"System Events\" to tell application process \"zoom.us\"\n"
+        "      if exists (menu bar item \"Meeting\" of menu bar 1) then\n"
+        "        if exists (menu item \"%@\" of menu 1 of menu bar item \"%@\" of menu bar 1) then\n"
+        "          tell application \"zoom.us\" to activate\n"
+        "          click (menu item \"%@\" of menu 1 of menu bar item \"%@\" of menu bar 1)\n"
+        "          click (menu item \"%@\" of menu 1 of menu bar item \"%@\" of menu bar 1)\n"
+        "          delay 0.5\n"
+        "          click button 1 of window 1\n"
+        "          set didRun to true\n"
+        "        end if\n"
+        "      end if\n"
+        "    end tell\n"
+        "  end if\n"
+        "  return didRun\n"
+        "end tell\n",
+        [NSString stringWithUTF8String:m_zoomMenuZoomMeeting.c_str()], 
+        [NSString stringWithUTF8String:m_zoomMenuWindow.c_str()], 
+        [NSString stringWithUTF8String:m_zoomMenuZoomMeeting.c_str()],
+        [NSString stringWithUTF8String:m_zoomMenuWindow.c_str()], 
+        [NSString stringWithUTF8String:m_zoomMenuClose.c_str()], 
+        [NSString stringWithUTF8String:m_zoomMenuWindow.c_str()] 
+      ];
+    ESDDebug("osLeaveZoomMeeting script: %s", [source cStringUsingEncoding: NSUTF8StringEncoding]);
+    NSDictionary *errorInfo = nil;
+    NSAppleScript *appleScript = [[NSAppleScript alloc] initWithSource:source];
+    NSAppleEventDescriptor *theDescriptor = [appleScript executeAndReturnError:&errorInfo];
+    NSString *theResult = [theDescriptor stringValue];
+    [appleScript release];
+    if (errorInfo) {
+      ESDLog("osLeaveZoomMeeting errorInfo: %s", [[errorInfo description] cStringUsingEncoding: NSUTF8StringEncoding]);
+    }
+    else {
+      ESDDebug("osLeaveZoomMeeting didRun: %s", [theResult cStringUsingEncoding: NSUTF8StringEncoding]);
+    }
+  }  
 }
 
-void osToggleZoomShare()
-{
-  const std::string script = "osascript -e '"
-                             "tell application \"zoom.us\"\n"
-                             "  tell application \"System Events\" to tell application process \"zoom.us\"\n"
-                             "    if exists (menu item \"" +
-                             m_zoomMenuStartShare + "\" of menu 1 of menu bar item \"" + m_zoomMenuMeeting + "\" of menu bar 1) then\n"
-                                                                                                             "      click (menu item \"" +
-                             m_zoomMenuStartShare + "\" of menu 1 of menu bar item \"" + m_zoomMenuMeeting + "\" of menu bar 1)\n"
-                                                                                                             "    else\n"
-                                                                                                             "      click (menu item \"" +
-                             m_zoomMenuStopShare + "\" of menu 1 of menu bar item \"" + m_zoomMenuMeeting + "\" of menu bar 1)\n"
-                                                                                                            "    end if\n"
-                                                                                                            "  end tell\n"
-                                                                                                            "end tell'\n";
-  //ESDDebug(script.c_str());
-  system(script.c_str());
+void osFocusZoomWindow() {
+  @autoreleasepool
+  {
+    NSString *source = @""
+          "tell application \"zoom.us\"\n"
+          "  activate\n"
+          "end tell\n";
+    ESDDebug("osFocusZoomWindow script: %s", [source cStringUsingEncoding: NSUTF8StringEncoding]);
+    NSDictionary *errorInfo = nil;
+    NSAppleScript *appleScript = [[NSAppleScript alloc] initWithSource:source];
+    NSAppleEventDescriptor *theDescriptor = [appleScript executeAndReturnError:&errorInfo];
+    NSString *theResult = [theDescriptor stringValue];
+    [appleScript release];
+    if (errorInfo) {
+      ESDLog("osFocusZoomWindow errorInfo: %s", [[errorInfo description] cStringUsingEncoding: NSUTF8StringEncoding]);
+    }
+  }
 }
 
-void osToggleZoomVideo()
-{
-  const std::string script = "osascript -e '"
-                             "tell application \"zoom.us\"\n"
-                             "  tell application \"System Events\" to tell application process \"zoom.us\"\n"
-                             "    if exists (menu item \"" +
-                             m_zoomMenuStartVideo + "\" of menu 1 of menu bar item \"" + m_zoomMenuMeeting + "\" of menu bar 1) then\n"
-                                                                                                             "      click (menu item \"" +
-                             m_zoomMenuStartVideo + "\" of menu 1 of menu bar item \"" + m_zoomMenuMeeting + "\" of menu bar 1)\n"
-                                                                                                             "    else\n"
-                                                                                                             "      click (menu item \"" +
-                             m_zoomMenuStopVideo + "\" of menu 1 of menu bar item \"" + m_zoomMenuMeeting + "\" of menu bar 1)\n"
-                                                                                                            "    end if\n"
-                                                                                                            "  end tell\n"
-                                                                                                            "end tell'\n";
-  //ESDDebug(script.c_str());
-  system(script.c_str());
+void osToggleZoomRecordCloud() {
+  @autoreleasepool
+  {
+    NSString *source = [NSString stringWithFormat:@""
+        "tell application \"System Events\"\n"
+        "	set didRun to false\n"
+        "	if (get name of every application process) contains \"zoom.us\" then\n"
+        "		tell application \"System Events\" to tell application process \"zoom.us\"\n"
+        "			if exists (menu item \"%@\" of menu 1 of menu bar item \"%@\" of menu bar 1) then\n"
+        "				click (menu item \"%@\" of menu 1 of menu bar item \"%@\" of menu bar 1)\n"
+        "				set didRun to true\n"
+        "			else if exists (menu item \"%@\" of menu 1 of menu bar item \"%@\" of menu bar 1) then\n"
+        "				click (menu item \"%@\" of menu 1 of menu bar item \"%@\" of menu bar 1)\n"
+        "				set didRun to true\n"
+        "			else if exists (menu item \"%@\" of menu 1 of menu bar item \"%@\" of menu bar 1) then\n"
+        "				click (menu item \"%@\" of menu 1 of menu bar item \"%@\" of menu bar 1)\n"
+        "				set didRun to true\n"
+        "			end if\n"
+        "		end tell\n"
+        "	end if\n"
+        "	return didRun\n"
+        "end tell\n",
+        [NSString stringWithUTF8String:m_zoomMenuStartRecordToCloud.c_str()], 
+        [NSString stringWithUTF8String:m_zoomMenuMeeting.c_str()], 
+        [NSString stringWithUTF8String:m_zoomMenuStartRecordToCloud.c_str()], 
+        [NSString stringWithUTF8String:m_zoomMenuMeeting.c_str()], 
+        [NSString stringWithUTF8String:m_zoomMenuStartRecord.c_str()], 
+        [NSString stringWithUTF8String:m_zoomMenuMeeting.c_str()], 
+        [NSString stringWithUTF8String:m_zoomMenuStartRecord.c_str()], 
+        [NSString stringWithUTF8String:m_zoomMenuMeeting.c_str()], 
+        [NSString stringWithUTF8String:m_zoomMenuStopRecordToCloud.c_str()], 
+        [NSString stringWithUTF8String:m_zoomMenuMeeting.c_str()], 
+        [NSString stringWithUTF8String:m_zoomMenuStopRecordToCloud.c_str()], 
+        [NSString stringWithUTF8String:m_zoomMenuMeeting.c_str()]
+      ];
+    ESDDebug("osToggleZoomRecordCloud script: %s", [source cStringUsingEncoding: NSUTF8StringEncoding]);
+    NSDictionary *errorInfo = nil;
+    NSAppleScript *appleScript = [[NSAppleScript alloc] initWithSource:source];
+    NSAppleEventDescriptor *theDescriptor = [appleScript executeAndReturnError:&errorInfo];
+    NSString *theResult = [theDescriptor stringValue];
+    [appleScript release];
+    if (errorInfo) {
+      ESDLog("osToggleZoomRecordCloud errorInfo: %s", [[errorInfo description] cStringUsingEncoding: NSUTF8StringEncoding]);
+    }
+    else {
+      ESDDebug("osToggleZoomRecordCloud didRun: %s", [theResult cStringUsingEncoding: NSUTF8StringEncoding]);
+    }
+  }  
 }
 
-void osLeaveZoomMeeting()
-{
-  const std::string script = "osascript -e '"
-                             "tell application \"zoom.us\" to activate\n"
-                             "tell application \"System Events\" to tell application process \"zoom.us\"\n"
-                             "	if exists (menu bar item \"" +
-                             m_zoomMenuWindow + "\" of menu bar 1) then\n"
-                                                "		click (menu item \"" +
-                             m_zoomMenuClose + "\" of menu 1 of menu bar item \"" + m_zoomMenuWindow + "\" of menu bar 1)\n"
-                                                                                                       "		delay 0.5\n"
-                                                                                                       "		click button 1 of window 1\n"
-                                                                                                       "	end if\n"
-                                                                                                       "end tell'";
-  //ESDDebug(script.c_str());
-  system(script.c_str());
+void osToggleZoomRecordLocal() {
+  @autoreleasepool
+  {
+    NSString *source = [NSString stringWithFormat:@""
+        "tell application \"System Events\"\n"
+        "	set didRun to false\n"
+        "	if (get name of every application process) contains \"zoom.us\" then\n"
+        "		tell application \"System Events\" to tell application process \"zoom.us\"\n"
+        "			if exists (menu item \"%@\" of menu 1 of menu bar item \"%@\" of menu bar 1) then\n"
+        "				click (menu item \"%@\" of menu 1 of menu bar item \"%@\" of menu bar 1)\n"
+        "				set didRun to true\n"
+        "			else if exists (menu item \"%@\" of menu 1 of menu bar item \"%@\" of menu bar 1) then\n"
+        "				click (menu item \"%@\" of menu 1 of menu bar item \"%@\" of menu bar 1)\n"
+        "				set didRun to true\n"
+        "			else if exists (menu item \"%@\" of menu 1 of menu bar item \"%@\" of menu bar 1) then\n"
+        "				click (menu item \"%@\" of menu 1 of menu bar item \"%@\" of menu bar 1)\n"
+        "				set didRun to true\n"
+        "			end if\n"
+        "		end tell\n"
+        "	end if\n"
+        "	return didRun\n"
+        "end tell\n",
+        [NSString stringWithUTF8String:m_zoomMenuStartRecordLocal.c_str()], 
+        [NSString stringWithUTF8String:m_zoomMenuMeeting.c_str()], 
+        [NSString stringWithUTF8String:m_zoomMenuStartRecordLocal.c_str()], 
+        [NSString stringWithUTF8String:m_zoomMenuMeeting.c_str()], 
+        [NSString stringWithUTF8String:m_zoomMenuStartRecord.c_str()], 
+        [NSString stringWithUTF8String:m_zoomMenuMeeting.c_str()], 
+        [NSString stringWithUTF8String:m_zoomMenuStartRecord.c_str()], 
+        [NSString stringWithUTF8String:m_zoomMenuMeeting.c_str()], 
+        [NSString stringWithUTF8String:m_zoomMenuStopRecordLocal.c_str()], 
+        [NSString stringWithUTF8String:m_zoomMenuMeeting.c_str()], 
+        [NSString stringWithUTF8String:m_zoomMenuStopRecordLocal.c_str()], 
+        [NSString stringWithUTF8String:m_zoomMenuMeeting.c_str()]
+      ];
+    ESDDebug("osToggleZoomRecordLocal script: %s", [source cStringUsingEncoding: NSUTF8StringEncoding]);
+    NSDictionary *errorInfo = nil;
+    NSAppleScript *appleScript = [[NSAppleScript alloc] initWithSource:source];
+    NSAppleEventDescriptor *theDescriptor = [appleScript executeAndReturnError:&errorInfo];
+    NSString *theResult = [theDescriptor stringValue];
+    [appleScript release];
+    if (errorInfo) {
+      ESDLog("osToggleZoomRecordLocal errorInfo: %s", [[errorInfo description] cStringUsingEncoding: NSUTF8StringEncoding]);
+    }
+    else {
+      ESDDebug("osToggleZoomRecordLocal didRun: %s", [theResult cStringUsingEncoding: NSUTF8StringEncoding]);
+    }
+  }  
 }
 
-void osFocusZoomWindow()
-{
-  const char *script = "osascript -e 'tell application \"zoom.us\"\nactivate\nend tell'";
-  //ESDDebug(script);
-  system(script);
+void osMuteAll() {
+  @autoreleasepool
+  {
+    NSString *source = [NSString stringWithFormat:@""
+        "tell application \"System Events\"\n"
+        "	set didRun to false\n"
+        "	if (get name of every application process) contains \"zoom.us\" then\n"
+        "		tell application \"System Events\" to tell application process \"zoom.us\"\n"
+        "			if exists (menu item \"%@\" of menu 1 of menu bar item \"%@\" of menu bar 1) then\n"
+        "				click (menu item \"%@\" of menu 1 of menu bar item \"%@\" of menu bar 1)\n"
+        "				set didRun to true\n"
+        "			end if\n"
+        "		end tell\n"
+        "	end if\n"
+        "	return didRun\n"
+        "end tell\n",
+        [NSString stringWithUTF8String:m_zoomMenuMuteAll.c_str()], 
+        [NSString stringWithUTF8String:m_zoomMenuMeeting.c_str()], 
+        [NSString stringWithUTF8String:m_zoomMenuMuteAll.c_str()], 
+        [NSString stringWithUTF8String:m_zoomMenuMeeting.c_str()] 
+      ];
+    ESDDebug("osMuteAll script: %s", [source cStringUsingEncoding: NSUTF8StringEncoding]);
+    NSDictionary *errorInfo = nil;
+    NSAppleScript *appleScript = [[NSAppleScript alloc] initWithSource:source];
+    NSAppleEventDescriptor *theDescriptor = [appleScript executeAndReturnError:&errorInfo];
+    NSString *theResult = [theDescriptor stringValue];
+    [appleScript release];
+    if (errorInfo) {
+      ESDLog("osMuteAll errorInfo: %s", [[errorInfo description] cStringUsingEncoding: NSUTF8StringEncoding]);
+    }
+    else {
+      ESDDebug("osMuteAll didRun: %s", [theResult cStringUsingEncoding: NSUTF8StringEncoding]);
+    }
+  }  
 }
 
-void osToggleZoomRecordCloud()
-{
-  const std::string script = "osascript -e '"
-                             "tell application \"zoom.us\"\n"
-                             "  tell application \"System Events\" to tell application process \"zoom.us\"\n"
-                             "    if exists (menu item \"" +
-                             m_zoomMenuStartRecordToCloud + "\" of menu 1 of menu bar item \"" + m_zoomMenuMeeting + "\" of menu bar 1) then\n"
-                                                                                                                     "      click (menu item \"" +
-                             m_zoomMenuStartRecordToCloud + "\" of menu 1 of menu bar item \"" + m_zoomMenuMeeting + "\" of menu bar 1)\n"
-                                                                                                                     "    else if exists (menu item \"" +
-                             m_zoomMenuStartRecord + "\" of menu 1 of menu bar item \"" +
-                             m_zoomMenuMeeting + "\" of menu bar 1) then\n"
-                                                 "      click (menu item \"" +
-                             m_zoomMenuStartRecord + "\" of menu 1 of menu bar item \"" +
-                             m_zoomMenuMeeting + "\" of menu bar 1)\n"
-                                                 "    else\n"
-                                                 "      click (menu item \"" +
-                             m_zoomMenuStopRecordToCloud + "\" of menu 1 of menu bar item \"" + m_zoomMenuMeeting + "\" of menu bar 1)\n"
-                                                                                                                    "    end if\n"
-                                                                                                                    "  end tell\n"
-                                                                                                                    "end tell'\n";
-  //ESDDebug(script.c_str());
-  system(script.c_str());
+void osUnmuteAll() {
+  @autoreleasepool
+  {
+    NSString *source = [NSString stringWithFormat:@""
+        "tell application \"System Events\"\n"
+        "	set didRun to false\n"
+        "	if (get name of every application process) contains \"zoom.us\" then\n"
+        "		tell application \"System Events\" to tell application process \"zoom.us\"\n"
+        "			if exists (menu item \"%@\" of menu 1 of menu bar item \"%@\" of menu bar 1) then\n"
+        "				click (menu item \"%@\" of menu 1 of menu bar item \"%@\" of menu bar 1)\n"
+        "				set didRun to true\n"
+        "			end if\n"
+        "		end tell\n"
+        "	end if\n"
+        "	return didRun\n"
+        "end tell\n",
+        [NSString stringWithUTF8String:m_zoomMenuUnmuteAll.c_str()], 
+        [NSString stringWithUTF8String:m_zoomMenuMeeting.c_str()], 
+        [NSString stringWithUTF8String:m_zoomMenuUnmuteAll.c_str()], 
+        [NSString stringWithUTF8String:m_zoomMenuMeeting.c_str()] 
+      ];
+    ESDDebug("osUnmuteAll script: %s", [source cStringUsingEncoding: NSUTF8StringEncoding]);
+    NSDictionary *errorInfo = nil;
+    NSAppleScript *appleScript = [[NSAppleScript alloc] initWithSource:source];
+    NSAppleEventDescriptor *theDescriptor = [appleScript executeAndReturnError:&errorInfo];
+    NSString *theResult = [theDescriptor stringValue];
+    [appleScript release];
+    if (errorInfo) {
+      ESDLog("osUnmuteAll errorInfo: %s", [[errorInfo description] cStringUsingEncoding: NSUTF8StringEncoding]);
+    }
+    else {
+      ESDDebug("osUnmuteAll didRun: %s", [theResult cStringUsingEncoding: NSUTF8StringEncoding]);
+    }
+  }  
 }
 
-void osToggleZoomRecordLocal()
-{
-  const std::string script = "osascript -e '"
-                             "tell application \"zoom.us\"\n"
-                             "  tell application \"System Events\" to tell application process \"zoom.us\"\n"
-                             "    if exists (menu item \"" +
-                             m_zoomMenuStartRecordLocal + "\" of menu 1 of menu bar item \"" + m_zoomMenuMeeting + "\" of menu bar 1) then\n"
-                                                                                                                   "      click (menu item \"" +
-                             m_zoomMenuStartRecordLocal + "\" of menu 1 of menu bar item \"" + m_zoomMenuMeeting + "\" of menu bar 1)\n"
-                                                                                                                   "    else if exists (menu item \"" +
-                             m_zoomMenuStartRecord + "\" of menu 1 of menu bar item \"" + m_zoomMenuMeeting + "\" of menu bar 1) then\n"
-                                                                                                              "      click (menu item \"" +
-                             m_zoomMenuStartRecordLocal + "\" of menu 1 of menu bar item \"" + m_zoomMenuMeeting + "\" of menu bar 1)\n"
-                                                                                                                   "    else\n"
-                                                                                                                   "      click (menu item \"" +
-                             m_zoomMenuStopRecordLocal + "\" of menu 1 of menu bar item \"" + m_zoomMenuMeeting + "\" of menu bar 1)\n"
-                                                                                                                  "    end if\n"
-                                                                                                                  "  end tell\n"
-                                                                                                                  "end tell'\n";
-  //ESDDebug(script.c_str());
-  system(script.c_str());
-}
-
-void osMuteAll()
-{
-  const std::string script = "osascript -e '"
-                             "tell application \"zoom.us\"\n"
-                             "  tell application \"System Events\" to tell application process \"zoom.us\"\n"
-                             "    if exists (menu item \"" +
-                             m_zoomMenuMuteAll + "\" of menu 1 of menu bar item \"" + m_zoomMenuMeeting + "\" of menu bar 1) then\n"
-                                                                                                          "      click (menu item \"" +
-                             m_zoomMenuMuteAll + "\" of menu 1 of menu bar item \"" + m_zoomMenuMeeting + "\" of menu bar 1)\n"
-                                                                                                          "      activate\n"
-                                                                                                          "      set frontmost to true\n"
-                                                                                                          "      delay 0.5\n"
-                                                                                                          "      keystroke return\n"
-                                                                                                          "    end if\n"
-                                                                                                          "  end tell\n"
-                                                                                                          "end tell'\n";
-  //ESDDebug(script.c_str());
-  system(script.c_str());
-}
-void osUnmuteAll()
-{
-  const std::string script = "osascript -e '"
-                             "tell application \"zoom.us\"\n"
-                             "  tell application \"System Events\" to tell application process \"zoom.us\"\n"
-                             "    if exists (menu item \"" +
-                             m_zoomMenuUnmuteAll + "\" of menu 1 of menu bar item \"" + m_zoomMenuMeeting + "\" of menu bar 1) then\n"
-                                                                                                            "      click (menu item \"" +
-                             m_zoomMenuUnmuteAll + "\" of menu 1 of menu bar item \"" + m_zoomMenuMeeting + "\" of menu bar 1)\n"
-                                                                                                            "    end if\n"
-                                                                                                            "  end tell\n"
-                                                                                                            "end tell'\n";
-  //ESDDebug(script.c_str());
-  system(script.c_str());
-}
-
-
-void osZoomCustomShortcut(std::string shortcut)
-{
+void osZoomCustomShortcut(std::string shortcut) {
   // build the apple script based on the incoming shortcut. Modifiers should always be first, so first check for mod keys, then move on to the key
   std::string s = shortcut;
   std::string delimiter = "+";
@@ -392,13 +541,37 @@ void osZoomCustomShortcut(std::string shortcut)
   // remove the last ", " from the modifiers string
   as_modifiers = as_modifiers.substr(0, as_modifiers.size()-2);
 
-  const std::string script = "osascript -e '"
-                       "tell application \"zoom.us\" to activate\n"
-                       "tell application \"zoom.us\"\n"
-                       "  tell application \"System Events\" to tell application process \"zoom.us\"\n"
-                       "    keystroke \""+as_key+"\" using {"+as_modifiers+"}\n"
-                       "  end tell\n"
-                       "end tell'";
-  //ESDDebug(script.c_str());
-  system(script.c_str());
+  @autoreleasepool
+  {
+    NSString *source = [NSString stringWithFormat:@""
+        "tell application \"System Events\"\n"
+        "	set didRun to false\n"
+        "	if (get name of every application process) does not contain \"zoom.us\" then\n"
+        "		tell application \"zoom.us\" to activate\n"
+        "		delay 3\n"
+        "	else\n"
+        "		tell application \"zoom.us\" to activate\n"
+        "	end if\n"
+        "	tell application \"System Events\" to tell application process \"zoom.us\"\n"
+        "		keystroke \"%@\" using {%@}\n"
+        "		set didRun to true\n"
+        "	end tell\n"
+        "	return didRun\n"
+        "end tell\n",
+        [NSString stringWithUTF8String:as_key.c_str()], 
+        [NSString stringWithUTF8String:as_modifiers.c_str()]
+      ];
+    ESDDebug("osZoomCustomShortcut script: %s", [source cStringUsingEncoding: NSUTF8StringEncoding]);
+    NSDictionary *errorInfo = nil;
+    NSAppleScript *appleScript = [[NSAppleScript alloc] initWithSource:source];
+    NSAppleEventDescriptor *theDescriptor = [appleScript executeAndReturnError:&errorInfo];
+    NSString *theResult = [theDescriptor stringValue];
+    [appleScript release];
+    if (errorInfo) {
+      ESDLog("osZoomCustomShortcut errorInfo: %s", [[errorInfo description] cStringUsingEncoding: NSUTF8StringEncoding]);
+    }
+    else {
+      ESDDebug("osZoomCustomShortcut didRun: %s", [theResult cStringUsingEncoding: NSUTF8StringEncoding]);
+    }
+  }  
 }

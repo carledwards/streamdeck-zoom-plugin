@@ -26,5 +26,5 @@ add_executable(
   sdzoomplugin
   ${SOURCES}
 )
-target_link_libraries(sdzoomplugin json StreamDeckSDK)
+target_link_libraries(sdzoomplugin json StreamDeckSDK ${EXTRA_LIBS})
 install(TARGETS sdzoomplugin DESTINATION ${CMAKE_INSTALL_PREFIX})
