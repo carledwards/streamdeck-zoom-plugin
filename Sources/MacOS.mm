@@ -1,5 +1,6 @@
 // Martijn Smit <martijn@lostdomain.org / @smitmartijn>
 
+#define NDEBUG
 // uncomment if you want debugging output (errors are always logged)
 // #undef NDEBUG
 
