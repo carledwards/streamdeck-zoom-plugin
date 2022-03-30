@@ -9,3 +9,7 @@ CMakeFiles
 CMakeCache.txt
 Vendor/*-prefix
 com.lostdomain.zoom.sdPlugin
+Sources/sdzoomplugin
+StreamDeckSDK/libStreamDeckSDK.a
+install_manifest.txt
+sdPlugin/manifest.json

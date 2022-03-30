@@ -16,15 +16,15 @@ endif()
 if(APPLE)
   set(SOURCES
     ${SOURCES}
-    MacOS.cpp
+    MacOS.mm
   )
+  find_library(FOUNDATION_LIBRARY Foundation)
+  SET(EXTRA_LIBS ${FOUNDATION_LIBRARY})
 endif()
-
-
 
 add_executable(
   sdzoomplugin
   ${SOURCES}
 )
-target_link_libraries(sdzoomplugin json StreamDeckSDK)
+target_link_libraries(sdzoomplugin json StreamDeckSDK ${EXTRA_LIBS})
 install(TARGETS sdzoomplugin DESTINATION ${CMAKE_INSTALL_PREFIX})

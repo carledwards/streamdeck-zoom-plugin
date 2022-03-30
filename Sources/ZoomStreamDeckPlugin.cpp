@@ -22,8 +22,8 @@
 #define CUSTOMSHORTCUT_ACTION_ID "com.lostdomain.zoom.customshortcut"
 
 std::string m_zoomMenuMeeting = "Meeting";
-std::string m_zoomMenuMuteAudio = "Mute audio";
-std::string m_zoomMenuUnmuteAudio = "Unmute audio";
+std::string m_zoomMenuMuteAudio = "Mute Audio";
+std::string m_zoomMenuUnmuteAudio = "Unmute Audio";
 
 std::string m_zoomMenuStartVideo = "Start Video";
 std::string m_zoomMenuStopVideo = "Stop Video";
@@ -39,6 +39,7 @@ std::string m_zoomMenuStopRecordLocal = "Stop Recording";
 
 std::string m_zoomMenuWindow = "Window";
 std::string m_zoomMenuClose = "Close";
+std::string m_zoomMenuZoomMeeting = "Zoom Meeting";
 
 std::string m_zoomMenuMuteAll = "Mute All";
 std::string m_zoomMenuUnmuteAll = "Ask All To Unmute";
@@ -91,7 +92,12 @@ json getZoomStatus()
 {
   // get Zoom Mute status
   std::string status = osGetZoomStatus();
-  //ESDDebug("OS script output status - %s", zoomStatus);
+  // ESDDebug("OS script output status - %s", status.c_str());
+
+  if (status.empty()) {
+    ESDDebug("getZoomStatus - osGetZoomStatus was empty");
+    return json();
+  }
 
   std::string statusMute;
   std::string statusVideo;
@@ -191,7 +197,7 @@ ZoomStreamDeckPlugin::ZoomStreamDeckPlugin()
 {
   ESDDebug("stored handle");
 
-  // start a timer that updates the current status every 3 seconds
+  // start a timer that updates the current status every 1.5 seconds
   mTimer = new CallBackTimer();
   mTimer->start(1500, [this]() { this->UpdateZoomStatus(); });
 }
@@ -211,13 +217,21 @@ void ZoomStreamDeckPlugin::UpdateZoomStatus()
     //ESDDebug("UpdateZoomStatus");
     // get zoom status for mute, video and whether it's open
     json newStatus = getZoomStatus();
+    if (newStatus.empty())
+    {
+      return;
+    }
+
     //ESDDebug("CURRENT: Zoom status %s", newStatus.dump().c_str());
-    // Status images: 0 = active, 1 = cross, 2 = disabled
-    auto newMuteState = 2;
-    auto newVideoState = 2;
-    auto newShareState = 2;
+    // Status images: 0 = active, 1 = cross, 3 = disabled 
+    // (the state value '2' for the images is never used but is a placeholder for auto-index advancing done by the Stream Deck system
+    //  when you press a button that has multiple states.  the image is the same value as image '1'.  It makes the button UI look correct
+    //  by acting like a toggle, but the button is actually a tri-state)
+    auto newMuteState = 3;
+    auto newVideoState = 3;
+    auto newShareState = 3;
     auto newLeaveState = 1;
-    auto newRecordState = 2;
+    auto newRecordState = 3;
     auto newFocusState = 1;
     auto newMuteAllState = 1;
     auto newUnmuteAllState = 1;
@@ -225,12 +239,12 @@ void ZoomStreamDeckPlugin::UpdateZoomStatus()
     // set mute, video, sharing, and focus to disabled when Zoom is closed
     if (EPLJSONUtils::GetStringByName(newStatus, "statusZoom") == "closed")
     {
-      newMuteState = 2;
-      newVideoState = 2;
-      newShareState = 2;
+      newMuteState = 3;
+      newVideoState = 3;
+      newShareState = 3;
       newLeaveState = 1;
       newFocusState = 1;
-      newRecordState = 2;
+      newRecordState = 3;
       newMuteAllState = 1;
       newUnmuteAllState = 1;
     }
@@ -402,13 +416,14 @@ void ZoomStreamDeckPlugin::KeyUpForAction(
 
   json jsonSettings;
   EPLJSONUtils::GetObjectByName(inPayload, "settings", jsonSettings);
-
   const auto state = EPLJSONUtils::GetIntByName(inPayload, "state");
-  bool updateStatus = false;
-  auto newState = 0;
 
-  if (inAction == MUTETOGGLE_ACTION_ID)
-  {
+  if (inAction == MUTETOGGLE_ACTION_ID) {
+
+    // force update the mute toggle button (Stream Deck automatically sets the button to the next state)
+    const auto button = mButtons[inAction];
+    mConnectionManager->SetState(state == 2 ? 2 : state == 0 ? 1 : 0, button.context);
+
     std::string zoomMenuMeeting = EPLJSONUtils::GetStringByName(jsonSettings, "zoomMenuMeeting");
     std::string zoomMenuMuteAudio = EPLJSONUtils::GetStringByName(jsonSettings, "zoomMenuMuteAudio");
     std::string zoomMenuUnmuteAudio = EPLJSONUtils::GetStringByName(jsonSettings, "zoomMenuUnmuteAudio");
@@ -423,21 +438,20 @@ void ZoomStreamDeckPlugin::KeyUpForAction(
       m_zoomMenuUnmuteAudio = zoomMenuUnmuteAudio;
 
     // state == 0 == want to be muted
-    if (state != 0)
-    {
+    if (state == 0) {
       ESDDebug("Unmuting Zoom!");
-    }
-    // state == 1 == want to be unmuted
-    else
-    {
+    } else {
       ESDDebug("Muting Zoom!");
     }
 
     osToggleZoomMute();
-    updateStatus = true;
   }
   else if (inAction == SHARETOGGLE_ACTION_ID)
   {
+    // force update the mute toggle button (Stream Deck automatically sets the button to the next state)
+    const auto button = mButtons[inAction];
+    mConnectionManager->SetState(state == 2 ? 2 : state == 0 ? 1 : 0, button.context);
+
     std::string zoomMenuMeeting = EPLJSONUtils::GetStringByName(jsonSettings, "zoomMenuMeeting");
     std::string zoomMenuStartShare = EPLJSONUtils::GetStringByName(jsonSettings, "zoomMenuStartShare");
     std::string zoomMenuStopShare = EPLJSONUtils::GetStringByName(jsonSettings, "zoomMenuStopShare");
@@ -463,10 +477,13 @@ void ZoomStreamDeckPlugin::KeyUpForAction(
     }
 
     osToggleZoomShare();
-    updateStatus = true;
   }
   else if (inAction == VIDEOTOGGLE_ACTION_ID)
   {
+    // force update the mute toggle button (Stream Deck automatically sets the button to the next state)
+    const auto button = mButtons[inAction];
+    mConnectionManager->SetState(state == 2 ? 2 : state == 0 ? 1 : 0, button.context);
+
     std::string zoomMenuMeeting = EPLJSONUtils::GetStringByName(jsonSettings, "zoomMenuMeeting");
     std::string zoomMenuStartVideo = EPLJSONUtils::GetStringByName(jsonSettings, "zoomMenuStartVideo");
     std::string zoomMenuStopVideo = EPLJSONUtils::GetStringByName(jsonSettings, "zoomMenuStopVideo");
@@ -492,7 +509,6 @@ void ZoomStreamDeckPlugin::KeyUpForAction(
     }
 
     osToggleZoomVideo();
-    updateStatus = true;
   }
   // focus on Zoom window
   else if (inAction == FOCUS_ACTION_ID)
@@ -520,6 +536,10 @@ void ZoomStreamDeckPlugin::KeyUpForAction(
   // toggles cloud recording
   else if (inAction == RECORDCLOUDTOGGLE_ACTION_ID)
   {
+    // force update the mute toggle button (Stream Deck automatically sets the button to the next state)
+    const auto button = mButtons[inAction];
+    mConnectionManager->SetState(state == 2 ? 2 : state == 0 ? 1 : 0, button.context);
+
     std::string zoomMenuMeeting = EPLJSONUtils::GetStringByName(jsonSettings, "zoomMenuMeeting");
     std::string zoomMenuStartRecordToCloud = EPLJSONUtils::GetStringByName(jsonSettings, "zoomMenuStartRecordToCloud");
     std::string zoomMenuStopRecordToCloud = EPLJSONUtils::GetStringByName(jsonSettings, "zoomMenuStopRecordToCloud");
@@ -544,6 +564,10 @@ void ZoomStreamDeckPlugin::KeyUpForAction(
   // toggles local recording
   else if (inAction == RECORDLOCALTOGGLE_ACTION_ID)
   {
+    // force update the mute toggle button (Stream Deck automatically sets the button to the next state)
+    const auto button = mButtons[inAction];
+    mConnectionManager->SetState(state == 2 ? 2 : state == 0 ? 1 : 0, button.context);
+
     std::string zoomMenuMeeting = EPLJSONUtils::GetStringByName(jsonSettings, "zoomMenuMeeting");
     std::string zoomMenuStartRecordLocal = EPLJSONUtils::GetStringByName(jsonSettings, "zoomMenuStartRecordLocal");
     std::string zoomMenuStopRecordLocal = EPLJSONUtils::GetStringByName(jsonSettings, "zoomMenuStopRecordLocal");
@@ -605,11 +629,6 @@ void ZoomStreamDeckPlugin::KeyUpForAction(
     if(!zoomCustomShortcut.empty()) {
       osZoomCustomShortcut(zoomCustomShortcut);
     }
-  }
-
-  if (updateStatus)
-  {
-    UpdateZoomStatus();
   }
 }
 

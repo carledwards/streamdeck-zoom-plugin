@@ -9,6 +9,9 @@
           "Image": "streamdeck-zoom-unmuted"
         },
         {
+          "Image": "streamdeck-zoom-muted"
+        },
+        {
           "Image": "streamdeck-zoom-muted-closed"
         }
       ],
@@ -28,6 +31,9 @@
           "Image": "streamdeck-zoom-video-started"
         },
         {
+          "Image": "streamdeck-zoom-video-stopped"
+        },
+        {
           "Image": "streamdeck-zoom-video-closed"
         }
       ],
@@ -45,6 +51,9 @@
         },
         {
           "Image": "streamdeck-zoom-share-stop"
+        },
+        {
+          "Image": "streamdeck-zoom-share-start-placeholder"
         },
         {
           "Image": "streamdeck-zoom-share-closed"
@@ -98,6 +107,9 @@
           "Image": "streamdeck-zoom-record-cloud-started"
         },
         {
+          "Image": "streamdeck-zoom-record-cloud-stopped-placeholder"
+        },
+        {
           "Image": "streamdeck-zoom-record-cloud-disabled"
         }
       ],
@@ -115,6 +127,9 @@
         },
         {
           "Image": "streamdeck-zoom-record-local-started"
+        },
+        {
+          "Image": "streamdeck-zoom-record-local-stopped-placeholder"
         },
         {
           "Image": "streamdeck-zoom-record-local-disabled"
