@@ -2,6 +2,7 @@ x64/
 .vs
 .vscode/
 build/
+Release/
 Makefile
 cmake_install.cmake
 .DS_Store

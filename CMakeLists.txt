@@ -4,7 +4,7 @@ project(com.lostdomain.zoom.sdPlugin VERSION 3.0)
 
 set(
   CMAKE_INSTALL_PREFIX
-  "../${CMAKE_PROJECT_NAME}"
+  "${CMAKE_CURRENT_SOURCE_DIR}/build/dist"
 )
 
 set(CMAKE_CXX_STANDARD 11)
