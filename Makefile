@@ -34,8 +34,12 @@ package: install
 		echo "Error: build/dist directory not found. Did the install succeed?"; \
 		exit 1; \
 	fi
-	@echo "Creating plugin package from contents in build/dist/..."
-	@cd build/dist && zip -r ../com.lostdomain.zoom.streamDeckPlugin * && \
+	@echo "Creating plugin package with correct directory structure..."
+	@cd build && \
+	rm -rf com.lostdomain.zoom.sdPlugin && \
+	mkdir -p com.lostdomain.zoom.sdPlugin && \
+	cp -R dist/* com.lostdomain.zoom.sdPlugin/ && \
+	zip -r com.lostdomain.zoom.streamDeckPlugin com.lostdomain.zoom.sdPlugin && \
 	echo "Created Stream Deck plugin package: build/com.lostdomain.zoom.streamDeckPlugin"
 
 # Help target
