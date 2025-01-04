@@ -7,7 +7,7 @@ set(
   "${CMAKE_CURRENT_SOURCE_DIR}/build/dist"
 )
 
-set(CMAKE_CXX_STANDARD 11)
+set(CMAKE_CXX_STANDARD 17)
 set(CXX_STANDARD_REQUIRED true)
 if (MSVC)
   add_definitions("/Zc:__cplusplus")
