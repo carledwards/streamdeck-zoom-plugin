@@ -27,6 +27,17 @@ install: build
 	@echo "Installing plugin..."
 	@cd build && make install
 
+# Package the Stream Deck plugin
+package: install
+	@echo "Packaging Stream Deck plugin..."
+	@if [ ! -d "build/dist" ]; then \
+		echo "Error: build/dist directory not found. Did the install succeed?"; \
+		exit 1; \
+	fi
+	@echo "Creating plugin package from contents in build/dist/..."
+	@cd build/dist && zip -r ../com.lostdomain.zoom.streamDeckPlugin * && \
+	echo "Created Stream Deck plugin package: build/com.lostdomain.zoom.streamDeckPlugin"
+
 # Help target
 help:
 	@echo "Available targets:"
@@ -34,4 +45,5 @@ help:
 	@echo "  make clean    : Remove build artifacts"
 	@echo "  make rebuild  : Clean and rebuild project"
 	@echo "  make install  : Install the plugin"
+	@echo "  make package  : Create Stream Deck plugin package"
 	@echo "  make help     : Show this help message"
