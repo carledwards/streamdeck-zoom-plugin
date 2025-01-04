@@ -3,7 +3,6 @@ x64/
 .vscode/
 build/
 Release/
-Makefile
 cmake_install.cmake
 .DS_Store
 CMakeFiles
