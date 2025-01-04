@@ -2,7 +2,9 @@ x64/
 .vs
 .vscode/
 build/
-Makefile
+Release/
+
+# Generated files
 cmake_install.cmake
 .DS_Store
 CMakeFiles
@@ -13,3 +15,9 @@ Sources/sdzoomplugin
 StreamDeckSDK/libStreamDeckSDK.a
 install_manifest.txt
 sdPlugin/manifest.json
+
+# Generated Makefiles (keep root Makefile)
+/Sources/Makefile
+/StreamDeckSDK/Makefile
+/sdPlugin/Makefile
+/Vendor/Makefile
